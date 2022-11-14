@@ -5,6 +5,9 @@ input_path = '../input/서울의대법의학교실_Ancestry SNP Panel Genotype r
 
 def load_data():
     df_NEA = pd.read_csv(f'{input_path}/서울의대법의학교실_Ancestry SNP Panel Genotype raw data_2022_NEA.csv').dropna(how='all')
+    df_NEA.iloc[545:554, 2:] = df_NEA.iloc[545:554, 1:-1]
+    df_NEA.iloc[545:554, 2] = 'NN'
+
     df_SEA = pd.read_csv(f'{input_path}/서울의대법의학교실_Ancestry SNP Panel Genotype raw data_2022_SEA.csv').dropna(how='all')
     df_SWA = pd.read_csv(f'{input_path}/서울의대법의학교실_Ancestry SNP Panel Genotype raw data_2022_SWA.csv').dropna(how='all')
     df = pd.concat([df_NEA, df_SEA, df_SWA], axis=0, ignore_index=True).fillna('NN')
