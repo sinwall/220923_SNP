@@ -15,6 +15,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 
 from sklearn.metrics import accuracy_score
+
+
 import itertools
 
 import csv
@@ -46,7 +48,9 @@ def define_argparser():
 
     ap.add_argument('--filename', default='exp_log', type=str)
     ap.add_argument('--n_iter', default=500, type=int)
-    ap.add_argument('--max_drop', default=50, type=int)
+    ap.add_argument('--drop_min', default=5, type=int)
+    ap.add_argument('--drop_max', default=50, type=int)
+    ap.add_argument('--drop_step', default=5, type=int)
     ap.add_argument('--barcode_size', default=10, type=int)
 
     config = ap.parse_args()
@@ -58,46 +62,11 @@ def _extract_persistence_from_data(arr, metric='hamming', top_k=1):
         metric=metric, 
         homology_dimensions=(1, )
     )
-    pers = pers_hom.fit_transform(arr.T[np.newaxis])[0]
+    pers = pers_hom.fit_transform(arr[np.newaxis])[0]
 
     result = np.zeros((top_k, 2))
     result[:pers.shape[0]] = pers[(np.argsort(pers[:, 0] - pers[:, 1]))[:top_k], :2]
     return result
-
-
-# def run_experiment_once(
-#     X, y, train_idxs, col_pers, col_drop, model, metric='hamming'
-# ):    
-#     # splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-#     # for train_idxs, test_idxs in splitter.split(X, y):
-#     X_train, y_train = X[train_idxs], y[train_idxs]
-#     X_test, y_test = np.delete(X, train_idxs, axis=0), np.delete(y, train_idxs, axis=0)
-
-#     pers_full_control = _extract_persistence_from_data(X[:, col_pers])
-#     pers_full_modified = _extract_persistence_from_data(X[:, col_pers & (~col_drop)])
-#     pers_train_control = _extract_persistence_from_data(X_train[:, col_pers])
-#     pers_train_modified = _extract_persistence_from_data(X_train[:, col_pers & (~col_drop)])
-    
-#     model.fit(X_train, y_train)
-#     score_control = accuracy_score(y_test, model.predict(X_test))*1e2
-
-#     final_estimator = model._final_estimator
-
-#     if hasattr(final_estimator, 'min_categories'):
-#         min_categories = final_estimator.min_categories[:]
-#         final_estimator.set_params(min_categories=min_categories[~col_drop])
-#     model.fit(X_train[:, ~col_drop], y_train)
-#     score_modified = accuracy_score(y_test, model.predict(X_test[:, ~col_drop]))*1e2
-#     if hasattr(final_estimator, 'min_categories'):
-#         final_estimator.set_params(min_categories=min_categories)
-
-#     return np.concatenate([
-#         pers_full_control, pers_full_modified,
-#         pers_train_control, pers_train_modified,
-#         [score_control, score_modified]
-#     ], axis=0)
-
-
 
 def main(config):
     df = load_data()
@@ -131,46 +100,6 @@ def main(config):
     min_categories = df.iloc[:, 3:].nunique().values
 
 
-
-    # if config.ag_only:
-    #     file_w = open('../output/20230428_AG_log.csv', 'w', newline='')
-    #     writer = csv.writer(file_w)
-    #     writer.writerow(
-    #         ['model', 'n_drop', 'split_id'] + col_names
-    #     )
-    #     for n_drop in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]:
-    #         n_iter = 500
-    #         rng = np.random.default_rng(42)
-    #         col_pers = mask_AG_GA
-    #         for num in range(n_iter):
-    #             col_drop = np.full_like(col_pers, False)
-    #             col_drop[rng.choice(np.where(col_pers)[0], size=n_drop, replace=False)] = True
-    #             models = [
-    #                 make_pipeline(
-    #                     OneHotEncoder(
-    #                         handle_unknown='ignore'
-    #                     ),
-    #                     LogisticRegression(
-    #                         max_iter=1000,
-    #                         random_state=42
-    #                     )
-    #                 ),
-    #                 make_pipeline(
-    #                     CategoricalNB(
-    #                         min_categories=min_categories
-    #                     )
-    #                 )
-    #             ]
-    #             for model in models:
-
-    #                 for train_idxs, test_idxs in splitter.split(X_oe, y):
-    #                     exp_result =  run_experiment_once(
-    #                         X_oe, y, train_idxs, col_pers, col_drop, model, metric='hamming'
-    #                     )
-    #                     writer.writerow(
-    #                         [type(model._final_estimator).__name__, n_drop, num] + exp_result.tolist()
-    #                     )
-    # n_iter = 500
     n_iter = config.n_iter
     top_k = config.barcode_size
 
@@ -192,22 +121,34 @@ def main(config):
         dist_q[i, j] = np.min(np.mean(base3_with_perm[0, i] != base3_with_perm[:, j], axis=-1))
         dist_q[j, i] = dist_q[i, j]
 
-    exp_results = []
+    file_w = open(f'../output/20230517_{config.filename}.csv', 'w', newline='')
+    writer = csv.writer(file_w)
+    colnames = ['A&G_only', 'n_drop', 'split_id', 'model'] + \
+        ['accuracy_control', 'accuracy_modified']
+    for i in range(top_k):
+        colnames += [f'birth_control_{i}', f'death_control_{i}']
+    for i in range(top_k):
+        colnames += [f'birth_modified_{i}', f'death_modified_{i}']
+    colnames += ['Hausdorff_distance']
+    colnames += ['dropped_loci']
+    writer.writerow(colnames)
+    # exp_results = []
 
     for ag_only in [True, False]:
-        for n_drop in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]:
+        for n_drop in range(config.drop_min, config.drop_max+config.drop_step, config.drop_step):
             if n_drop > np.sum(mask_AG_GA) and ag_only:
                 continue
-            if n_drop > config.max_drop:
-                continue
+            print('\n', n_drop)
             # n_drop = 20
             rng = np.random.default_rng(42)
-            splitter = RepeatedStratifiedKFold(n_splits=5, n_repeats=n_iter, random_state=42)
+            splitter = RepeatedStratifiedKFold(n_splits=5, n_repeats=n_iter, random_state=42).split(X_oe, y)
             for num in range(n_iter):
+                print(num, end=' ')
                 col_drop = np.full((fd.shape[0], ), False)
                 col_drop[rng.choice(
                     (np.where(mask_AG_GA)[0] if ag_only else np.arange(fd.shape[0])), 
                     size=n_drop, replace=False)] = True
+                dropped_loci = ','.join(list(df.columns[3:][col_drop]))
                 models = [
                     ('pca+l2', make_pipeline(
                         OneHotEncoder(
@@ -274,10 +215,22 @@ def main(config):
                         )
                     ))
                 ]
-                for (train_idxs, test_idxs), _ in zip(splitter.split(X_oe, y), range(5)):
+                for (train_idxs, test_idxs), _ in zip(splitter, range(5)):
                     if ag_only:
-                        pers_control = _extract_persistence_from_data(X_oe[train_idxs].T, metric='hamming', top_k=top_k)
-                        pers_modified = _extract_persistence_from_data(X_oe[train_idxs].T[~col_drop], metric='hamming', top_k=top_k)
+                        dist_control = np.zeros_like(dist_f)
+                        for i, j in np.ndindex(dist_control.shape):
+                            if i >= j: continue
+                            dist_control[i, j] = np.mean(fd.iloc[i, train_idxs] != fd.iloc[j, train_idxs])
+                            dist_control[j, i] = dist_control[i, j]
+                        dist_modified = dist_control[mask_AG_GA&(~col_drop)][:, mask_AG_GA&(~col_drop)]
+                        dist_control = dist_control[mask_AG_GA][:, mask_AG_GA]
+                        hausdorff_dist = np.max(np.min(dist_control[col_drop[mask_AG_GA]][:, ~col_drop[mask_AG_GA]], axis=1), axis=0)
+                        # pers_control = _extract_persistence_from_data(
+                        #     X_oe[train_idxs].T[mask_AG_GA], 
+                        #     metric='hamming', top_k=top_k)
+                        # pers_modified = _extract_persistence_from_data(
+                        #     X_oe[train_idxs].T[mask_AG_GA & (~col_drop)], 
+                        #     metric='hamming', top_k=top_k)
                     else:
                         base3_train = base3_with_perm[:, :, train_idxs]
                         dist_control = np.zeros_like(dist_q)
@@ -285,10 +238,15 @@ def main(config):
                             if i >= j: continue
                             dist_control[i, j] = np.min(np.mean(base3_train[0, i] != base3_train[:, j], axis=-1))
                             dist_control[j, i] = dist_control[i, j]
-                        pers_control = _extract_persistence_from_data(dist_control, metric='precomputed', top_k=top_k)
-
                         dist_modified = dist_control[~col_drop][:, ~col_drop]
-                        pers_modified = _extract_persistence_from_data(dist_modified, metric='precomputed', top_k=top_k)
+                        hausdorff_dist = np.max(np.min(dist_control[col_drop][:, ~col_drop], axis=1), axis=0)
+                        # pers_control = _extract_persistence_from_data(dist_control, metric='precomputed', top_k=top_k)
+
+                        # dist_modified = dist_control[~col_drop][:, ~col_drop]
+                        # pers_modified = _extract_persistence_from_data(dist_modified, metric='precomputed', top_k=top_k)
+                    pers_control = _extract_persistence_from_data(dist_control, metric='precomputed', top_k=top_k)
+                    pers_modified = _extract_persistence_from_data(dist_modified, metric='precomputed', top_k=top_k)
+
 
                     for model_name, model in models:
                         model.fit(X_oe[train_idxs], y[train_idxs])
@@ -309,23 +267,14 @@ def main(config):
                             pers_control, pers_modified,
                         ], axis=0)
                         exp_result = [ag_only, n_drop, num, model_name] + exp_result.ravel().tolist()
-                        exp_results.append(exp_result)
+                        exp_result += [hausdorff_dist]
+                        exp_result += [dropped_loci]
+                        # exp_results.append(exp_result)
 
-                        # writer.writerow(
-                        #     [ag_only, n_drop, num, model_name] + exp_result.tolist()
-                        # )
+                        writer.writerow(exp_result)
 
-    file_w = open(f'../output/20230504_{config.filename}.csv', 'w', newline='')
-    writer = csv.writer(file_w)
-    colnames = ['A&G_only', 'n_drop', 'split_id', 'model'] + \
-        ['accuracy_control', 'accuracy_modified']
-    for i in range(top_k):
-        colnames += [f'birth_control_{i}', f'death_control_{i}']
-    for i in range(top_k):
-        colnames += [f'birth_modified_{i}', f'death_modified_{i}']
-    writer.writerow(colnames)
-    for row in exp_results:
-        writer.writerow(row)
+    # for row in exp_results:
+    #     writer.writerow(row)
     file_w.close()
     
 if __name__ == '__main__':
